@@ -54,6 +54,11 @@ public class KafkaStatsdMetricsReporter implements KafkaStatsdMetricsReporterMBe
   private boolean isTagEnabled;
   private AbstractPollingReporter underlying = null;
 
+  private String zookeeperConnect;
+  private KafkaAdminClient kafkaAdminClient;
+  private AbstractPollingReporter kafkaOffsetRepoorter;
+  private int brokerPort;
+  
   @Override
   public String getMBeanName() {
     return "kafka:type=" + getClass().getName();
@@ -76,6 +81,8 @@ public class KafkaStatsdMetricsReporter implements KafkaStatsdMetricsReporterMBe
   }
 
   private void loadConfig(VerifiableProperties props) {
+	  brokerPort = props.getInt("port", 9092);
+	  zookeeperConnect = props.getString("zookeeper.connect", "localhost:2181");
     enabled = props.getBoolean("external.kafka.statsd.reporter.enabled", false);
     host = props.getString("external.kafka.statsd.host", "localhost");
     port = props.getInt("external.kafka.statsd.port", 8125);
@@ -111,6 +118,11 @@ public class KafkaStatsdMetricsReporter implements KafkaStatsdMetricsReporterMBe
             metricDimensions,
             isTagEnabled);
         underlying.start(pollingPeriodInSeconds, TimeUnit.SECONDS);
+        
+        kafkaAdminClient = new KafkaAdminClient(zookeeperConnect, "localhost:" + brokerPort);
+        kafkaOffsetRepoorter = new KafkaOffsetStatsDReporter(Metrics.defaultRegistry(), kafkaAdminClient, statsd, isTagEnabled);
+        kafkaOffsetRepoorter.start(pollingPeriodInSeconds, TimeUnit.SECONDS);
+        
         log.info("Started Reporter with host={}, port={}, polling_period_secs={}, prefix={}",
             host, port, pollingPeriodInSeconds, prefix);
         running.set(true);
@@ -139,6 +151,8 @@ public class KafkaStatsdMetricsReporter implements KafkaStatsdMetricsReporterMBe
       synchronized (running) {
         if (running.get()) {
           underlying.shutdown();
+          kafkaOffsetRepoorter.shutdown();
+          kafkaAdminClient.close();
           statsd.stop();
           running.set(false);
           log.info("Stopped Reporter with host={}, port={}", host, port);
